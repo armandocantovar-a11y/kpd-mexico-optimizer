@@ -1,0 +1,62 @@
+==============================================================================
+ BENCHMARK NACIONAL KPD v2.0 | N=1000 | semilla=2026 | k_max=2 | L_max=5 | altruistas=5
+ Solver: HiGHS (scipy.optimize.milp)
+==============================================================================
+Población sintética generada en 0.21 s
+
+Verificación de calibración (observado vs. objetivo):
+  ABO Receptores: O  55.2%  A  30.1%  B  11.9%  AB   2.8%   (objetivo 58/28/11/3)
+  ABO Donantes   : O  60.6%  A  26.1%  B  10.7%  AB   2.6%   (objetivo 58/28/11/3)
+  cPRA: 80-99%  27.9% | 25-79%   9.2% | 0-24%  62.9%   (objetivo 27/9/64)
+  Pediátricos:  13.3% (objetivo 13%) | edad media adultos: 38.6 años (objetivo ~38)
+  Pares incompatibles por construcción: 100% | con DSA añadido por azar de HLA:   22.8%
+  Altruistas generados: 5 (ABO: O 5)
+
+Autoverificación (40 parejas + 2 altruistas / 12 parejas para el óptimo exacto):
+  grafo=True  altruistas_sin_entradas=True  enumeración=True  óptimo_vs_exhaustivo=True  disjunción=True -> OK
+
+Ejecutando Escenario A (hospitales aislados)...
+  listo en 3.92 s
+Ejecutando Escenario B (red nacional unificada)...
+  listo en 10.43 s (grafo 2.20 s | ciclos 0.48 s | ILP 7.76 s)
+Ejecutando Escenario C (red nacional + 5 altruistas, L_max=5)...
+  listo en 9.80 s (grafo 2.30 s | ciclos+cadenas 0.67 s | ILP 6.84 s)
+Midiendo memoria (pasada aparte con tracemalloc; no afecta a los tiempos)...
+
+==================================================================================================================
+ TABLA COMPARATIVA
+==================================================================================================================
+Métrica                                           A: 20 hospitales         B: red nacional   C: red + 5 altruistas
+------------------------------------------------------------------------------------------------------------------
+Receptores de parejas trasplantados                    764 (76.4%)             990 (99.0%)             999 (99.9%)
+Trasplantes a lista de espera (cadenas)                          0                       0                       5
+TRASPLANTES TOTALES                                            764                     990                    1004
+Hipersensibilizados (cPRA>=80%)                    150/279 (53.8%)         272/279 (97.5%)         278/279 (99.6%)
+Pediátricos (<18 años)                             103/133 (77.4%)         129/133 (97.0%)         132/133 (99.2%)
+Puntaje clínico acumulado                                     7876                   13088                   13374
+------------------------------------------------------------------------------------------------------------------
+Altruistas usados / disponibles                                  —                       —                     5/5
+Longitud media de cadena (parejas)                               —                       —                     5.0
+Aristas compatibles                                         19,229                 390,294                 393,056
+Ciclos candidatos evaluados                                  3,572                  21,621                  21,621
+Cadenas candidatas evaluadas                                     —                       —                  16,628
+Estructuras elegidas (ciclos+cadenas)                        382+0                   495+0                   487+5
+Tiempo total de cómputo (s)                                   3.92                   10.43                    9.80
+Memoria pico Python (MB, tracemalloc)                          0.6                   207.5                   208.8
+Óptimo (gap<=0.1%) / tope alcanzado                        sí / no                 sí / no                 sí / no
+------------------------------------------------------------------------------------------------------------------
+
+EFECTO 1 — Unificar los hospitales (B vs A)
+  Receptores adicionales trasplantados : +226 (+29.6%)
+  Hipersensibilizados adicionales      : +122 | pediátricos adicionales: +26
+  Trasplantes por hospital en A: min 30 / media 38.2 / máx 48 (de 50 parejas cada uno)
+
+EFECTO 2 — Añadir 5 donantes altruistas a la red nacional (C vs B)
+  Receptores de parejas adicionales    : +9   <- efecto REAL sobre pacientes en espera de una pareja
+  Trasplantes a lista de espera        : +5   (1 por cadena: efecto por construcción del modelo)
+  Trasplantes totales                  : +14 (+2.80 por altruista)
+  Hipersensibilizados adicionales      : +6 (quedan 1 sin trasplante, de 279)
+  Pediátricos adicionales              : +3
+  Puntaje clínico                      : +286
+
+Nota: simulación con datos sintéticos y modelo HLA simplificado; los números ilustran el efecto de escala, no son una predicción clínica.
