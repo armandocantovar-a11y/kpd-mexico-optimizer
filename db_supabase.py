@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
@@ -78,10 +80,36 @@ def _respuesta_data(respuesta) -> list[dict[str, Any]]:
     return list(getattr(respuesta, "data", None) or [])
 
 
+def _meses_transcurridos(creado_en: Any, hoy: date | None = None) -> int:
+    """Meses completos desde creado_en, usando la fecha local de México."""
+    if not creado_en:
+        return 0
+    try:
+        if isinstance(creado_en, datetime):
+            fecha_inicio = (creado_en.astimezone(ZoneInfo("America/Mexico_City")).date()
+                            if creado_en.tzinfo else creado_en.date())
+        elif isinstance(creado_en, date):
+            fecha_inicio = creado_en
+        else:
+            texto = str(creado_en).strip().replace("Z", "+00:00")
+            try:
+                fecha_inicio_dt = datetime.fromisoformat(texto)
+                fecha_inicio = (fecha_inicio_dt.astimezone(ZoneInfo("America/Mexico_City")).date()
+                                if fecha_inicio_dt.tzinfo else fecha_inicio_dt.date())
+            except ValueError:
+                fecha_inicio = date.fromisoformat(texto[:10])
+        fecha_hoy = hoy or datetime.now(ZoneInfo("America/Mexico_City")).date()
+        return max(0, (fecha_hoy.year - fecha_inicio.year) * 12 + fecha_hoy.month - fecha_inicio.month
+                   - (fecha_hoy.day < fecha_inicio.day))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def insertar_pareja(
     id_pareja: str, hospital_id: int, donante_abo: str, donante_hla,
     receptor_abo: str, receptor_hla, receptor_inaceptables, receptor_cpra: int,
-    receptor_edad: int, *, advertir_compatibilidad: bool = True, client=None,
+    receptor_edad: int, *, meses_espera_previos: int = 0,
+    advertir_compatibilidad: bool = True, client=None,
 ) -> dict[str, Any]:
     """Registra pareja activa; retorna la fila y si era compatible de origen."""
     id_pareja = id_pareja.strip()
@@ -94,6 +122,8 @@ def insertar_pareja(
         raise ValueError("Se incluyeron antígenos HLA fuera del catálogo.")
     if not 0 <= int(receptor_cpra) <= 100 or not 0 <= int(receptor_edad) <= 120:
         raise ValueError("cPRA o edad fuera de rango.")
+    if not 0 <= int(meses_espera_previos) <= 240:
+        raise ValueError("Los meses previos de espera deben estar entre 0 y 240.")
     donante = kpd.Donante(donante_abo, frozenset(donante_hla))
     receptor = kpd.Receptor(receptor_abo, frozenset(receptor_hla), frozenset(receptor_inaceptables), int(receptor_cpra), int(receptor_edad))
     compatible = kpd.es_compatible(donante, receptor)
@@ -104,7 +134,8 @@ def insertar_pareja(
         "donante_abo": donante_abo, "donante_hla": sorted(donante.hla),
         "receptor_abo": receptor_abo, "receptor_hla": sorted(receptor.hla),
         "receptor_inaceptables": sorted(receptor.inaceptables),
-        "receptor_cpra": int(receptor_cpra), "receptor_edad": int(receptor_edad), "activa": True,
+        "receptor_cpra": int(receptor_cpra), "receptor_edad": int(receptor_edad),
+        "meses_espera_previos": int(meses_espera_previos), "activa": True,
     }
     data = _respuesta_data((client or cliente_usuario()).table("parejas").insert(fila).execute())
     return {**fila, "compatible_origen": compatible, **(data[0] if data else {})}
@@ -134,7 +165,9 @@ def obtener_pool_real(client=None) -> tuple[list[kpd.Pareja], list[kpd.DonanteAl
         donante = kpd.Donante(str(row["donante_abo"]), frozenset(row.get("donante_hla") or []))
         receptor = kpd.Receptor(str(row["receptor_abo"]), frozenset(row.get("receptor_hla") or []),
                                 frozenset(row.get("receptor_inaceptables") or []), int(row.get("receptor_cpra") or 0), int(row.get("receptor_edad") or 0))
-        pareja = kpd.Pareja(str(row["id_pareja"]), donante, receptor)
+        espera_previa = int(row.get("meses_espera_previos") or 0)
+        espera_total = espera_previa + _meses_transcurridos(row.get("creado_en"))
+        pareja = kpd.Pareja(str(row["id_pareja"]), donante, receptor, espera_total)
         parejas.append(pareja)
         ubicaciones[pareja.id] = str(row["hospital_id"])
     for row in rows_a:

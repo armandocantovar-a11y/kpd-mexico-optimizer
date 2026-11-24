@@ -12,6 +12,7 @@ import auth_medica as auth_ui
 import db_supabase as db
 import kpd_motor_emparejamiento as kpd
 import logistica_geografica as geo
+import simulador_rondas as sim_rondas
 
 
 st.set_page_config(page_title="KPD México | Optimización", layout="wide")
@@ -44,12 +45,12 @@ with st.sidebar:
     vista = st.radio("Vista del mapa", ["República Mexicana", "Valle de México"])
     ejecutar = st.button("Ejecutar optimización", type="primary", width="stretch")
 
-tabs = st.tabs(["Mapa y Optimización", "Registro Clínico (Supabase)", "Hospitales"], on_change="rerun")
+tabs = st.tabs(["Mapa y Optimización", "Registro Clínico (Supabase)", "Hospitales", "📈 Simulador longitudinal"], on_change="rerun")
 
 
-def crear_resultado(parejas, altruistas, ubic, centros, max_cit_min, peso_geo, k_max, l_max, exacto=False):
+def crear_resultado(parejas, altruistas, ubic, centros, max_cit_min, peso_geo, k_max, l_max, exacto=False, meses_espera=None):
     """Construye, filtra y resuelve; funciona también con pools de tamaño cero."""
-    G = bench.construir_grafo_rapido(parejas, altruistas)
+    G = bench.construir_grafo_rapido(parejas, altruistas, meses_espera=meses_espera)
     if ubic:
         desconocidos = sorted({h for h in ubic.values() if h not in centros})
         if desconocidos:
@@ -84,7 +85,9 @@ def ejecutar_optimizacion():
         hospitales = db.obtener_hospitales_aprobados(client)
         centros = geo.catalogo_desde_hospitales(hospitales)
         parejas, altruistas, ubic = db.obtener_pool_real(client)
-        resultado = crear_resultado(parejas, altruistas, ubic, centros, round(max_cit_horas*60), lam, kmax, lmax, exacto=True)
+        espera_por_pareja = {p.id: p.meses_espera for p in parejas}
+        resultado = crear_resultado(parejas, altruistas, ubic, centros, round(max_cit_horas*60), lam, kmax, lmax,
+                                    exacto=True, meses_espera=espera_por_pareja)
         resultado["fuente"] = fuente
         resultado["config"] = (kmax, lmax, max_cit_horas, lam)
     st.session_state["resultado_kpd"] = resultado
@@ -236,10 +239,12 @@ with tabs[1]:
         a,b = st.columns(2)
         cpra = a.slider("cPRA (%)", 0, 100, 0)
         edad = b.number_input("Edad del receptor", min_value=0, max_value=120, value=40)
+        espera_previa = st.number_input("Meses previos en lista de espera / diálisis", min_value=0, max_value=240, value=0, step=1)
         enviar_p = st.form_submit_button("Guardar pareja")
     if enviar_p:
         try:
-            db.insertar_pareja(id_p, hospital_p_id, abo_d, hla_d, abo_r, hla_r, inac, cpra, int(edad), client=db.cliente_usuario())
+            db.insertar_pareja(id_p, hospital_p_id, abo_d, hla_d, abo_r, hla_r, inac, cpra, int(edad),
+                               meses_espera_previos=int(espera_previa), client=db.cliente_usuario())
             st.success("Pareja guardada como activa.")
         except Exception as exc:
             st.error(f"No se pudo guardar la pareja: {exc}")
@@ -265,10 +270,11 @@ with tabs[1]:
             parejas_db, altruistas_db, ubic_db = db.obtener_pool_real()
             st.session_state["pool_clinico_visible"] = (parejas_db, altruistas_db, ubic_db)
             filas_pool = [{"tipo":"Pareja", "id":p.id, "hospital_id":ubic_db[p.id], "ABO donante":p.donante.abo,
-                           "ABO receptor":p.receptor.abo, "cPRA":p.receptor.cpra, "edad":p.receptor.edad, "activo":True} for p in parejas_db]
+                           "ABO receptor":p.receptor.abo, "cPRA":p.receptor.cpra, "edad":p.receptor.edad,
+                           "Meses espera":p.meses_espera, "activo":True} for p in parejas_db]
             filas_pool.extend({"tipo":"Altruista", "id":a.id, "hospital_id":ubic_db[a.id], "ABO donante":a.donante.abo,
-                               "ABO receptor":"—", "cPRA":"—", "edad":"—", "activo":True} for a in altruistas_db)
-            st.dataframe(pd.DataFrame(filas_pool, columns=["tipo","id","hospital_id","ABO donante","ABO receptor","cPRA","edad","activo"]), hide_index=True, width="stretch")
+                               "ABO receptor":"—", "cPRA":"—", "edad":"—", "Meses espera":"—", "activo":True} for a in altruistas_db)
+            st.dataframe(pd.DataFrame(filas_pool, columns=["tipo","id","hospital_id","ABO donante","ABO receptor","cPRA","edad","Meses espera","activo"]), hide_index=True, width="stretch")
             if perfil_actual.get("rol") == "admin":
                 filas_gestion = filas_pool
             else:
@@ -291,10 +297,11 @@ with tabs[1]:
         st.caption("Vista del pool guardada de la última consulta. Abre esta pestaña para actualizarla.")
         parejas_db, altruistas_db, ubic_db = st.session_state["pool_clinico_visible"]
         filas_pool = [{"tipo":"Pareja", "id":p.id, "hospital_id":ubic_db[p.id], "ABO donante":p.donante.abo,
-                       "ABO receptor":p.receptor.abo, "cPRA":p.receptor.cpra, "edad":p.receptor.edad, "activo":True} for p in parejas_db]
+                       "ABO receptor":p.receptor.abo, "cPRA":p.receptor.cpra, "edad":p.receptor.edad,
+                       "Meses espera":p.meses_espera, "activo":True} for p in parejas_db]
         filas_pool.extend({"tipo":"Altruista", "id":a.id, "hospital_id":ubic_db[a.id], "ABO donante":a.donante.abo,
-                           "ABO receptor":"—", "cPRA":"—", "edad":"—", "activo":True} for a in altruistas_db)
-        st.dataframe(pd.DataFrame(filas_pool, columns=["tipo","id","hospital_id","ABO donante","ABO receptor","cPRA","edad","activo"]), hide_index=True, width="stretch")
+                           "ABO receptor":"—", "cPRA":"—", "edad":"—", "Meses espera":"—", "activo":True} for a in altruistas_db)
+        st.dataframe(pd.DataFrame(filas_pool, columns=["tipo","id","hospital_id","ABO donante","ABO receptor","cPRA","edad","Meses espera","activo"]), hide_index=True, width="stretch")
     else:
         st.caption("El pool se mostrará aquí cuando Supabase esté configurado.")
 
@@ -310,3 +317,92 @@ with tabs[2]:
     st.dataframe(pd.DataFrame(hospitales_catalogo, columns=["id","nombre","ciudad","latitud","longitud","hub_aereo"]),
                  hide_index=True, width="stretch")
     auth_ui.render_hospital_request_form()
+
+with tabs[3]:
+    if tabs[3].open:
+        st.subheader("Simulador longitudinal de match runs")
+        st.caption("Genera cohortes sintéticas independientes cada mes y conserva todo el estado en memoria. Solo lee el catálogo aprobado de hospitales; no modifica las tablas clínicas.")
+        try:
+            cliente_sim = db.cliente_usuario()
+            hospitales_sim = db.obtener_hospitales_aprobados(cliente_sim)
+        except Exception as exc:
+            hospitales_sim = []
+            st.error(f"No se pudo leer el catálogo aprobado de hospitales: {exc}")
+
+        with st.form("parametros_simulador_rondas"):
+            st.markdown("#### Parámetros de la simulación")
+            col_a, col_b, col_c = st.columns(3)
+            meses_sim = col_a.slider("Horizonte (meses)", 3, 24, 12)
+            pares_ini = col_a.number_input("Parejas iniciales", min_value=0, max_value=1000, value=40, step=5)
+            alts_ini = col_a.number_input("Altruistas iniciales", min_value=0, max_value=30, value=2)
+            nuevas_mes = col_b.number_input("Nuevas parejas por mes", min_value=0, max_value=200, value=12, step=1)
+            prob_alt = col_b.slider("Probabilidad de altruista mensual", 0.0, 1.0, 0.3, 0.05)
+            max_ciclo_sim = col_c.selectbox("Longitud máxima de ciclo", [2, 3], index=1)
+            max_cadena_sim = col_c.slider("Longitud máxima de cadena", 1, 5, 4)
+            max_cit_sim = col_c.slider("CIT máximo (horas)", 1.0, 12.0, 8.0, 0.5)
+            seed_sim = st.number_input("Semilla reproducible", min_value=0, max_value=2_147_483_647, value=2026, step=1)
+            lanzar_sim = st.form_submit_button("▶️ Ejecutar simulación longitudinal", type="primary", width="stretch")
+
+        if lanzar_sim:
+            if not hospitales_sim:
+                st.error("No hay hospitales aprobados disponibles para ubicar el pool simulado.")
+            else:
+                st.session_state.pop("simulador_rondas_resultado", None)
+                barra = st.progress(0.0, text="Preparando la primera ronda…")
+
+                def actualizar_progreso(mes_actual, total_meses):
+                    barra.progress(mes_actual / total_meses, text=f"Match run {mes_actual} de {total_meses}")
+
+                try:
+                    resultado_sim = sim_rondas.simular_rondas(
+                        meses=int(meses_sim), parejas_iniciales=int(pares_ini),
+                        altruistas_iniciales=int(alts_ini), nuevas_parejas_mes=int(nuevas_mes),
+                        prob_altruista_mes=float(prob_alt), max_ciclo=int(max_ciclo_sim),
+                        max_cadena=int(max_cadena_sim), max_cit=float(max_cit_sim),
+                        seed=int(seed_sim), hospitales=hospitales_sim, on_progress=actualizar_progreso,
+                    )
+                    st.session_state["simulador_rondas_resultado"] = resultado_sim
+                    barra.progress(1.0, text="Simulación completada")
+                except Exception as exc:
+                    st.error(f"No se pudo completar la simulación: {exc}")
+
+        resultado_sim = st.session_state.get("simulador_rondas_resultado")
+        if resultado_sim is not None and not resultado_sim.empty:
+            ultima = resultado_sim.iloc[-1]
+            total_ingresadas = int(ultima["parejas_llegadas_acumuladas"])
+            total_resueltas = int(ultima["parejas_resueltas_acumuladas"])
+            n_resueltas = int(resultado_sim["parejas_resueltas_mes"].sum())
+            espera_total = sum(
+                float(fila.espera_promedio_trasplante_mes) * int(fila.parejas_resueltas_mes)
+                for fila in resultado_sim.itertuples()
+            )
+            espera_media = espera_total / n_resueltas if n_resueltas else 0.0
+            kpis = st.columns(4)
+            kpis[0].metric("Trasplantes realizados", f"{int(ultima['trasplantados_acumulados']):,}")
+            kpis[1].metric("Resolución del pool", f"{(100*total_resueltas/total_ingresadas):.1f}%" if total_ingresadas else "0.0%")
+            kpis[2].metric("Espera media al trasplante", f"{espera_media:.1f} meses")
+            kpis[3].metric("Alta sensibilización rescatada", f"{int(ultima['sensibilizados_rescatados_acumulados']):,}")
+            if resultado_sim["candidatos_truncados"].any():
+                st.warning("Al menos una ronda alcanzó los límites de enumeración podada del benchmark; el resultado usa los candidatos enumerados.")
+            if not resultado_sim["solver_optimo"].all():
+                st.warning("El solver no probó optimalidad en todas las rondas antes del límite de 30 segundos; las asignaciones siguen siendo factibles.")
+
+            st.markdown("#### Evolución del pool y los trasplantes")
+            st.line_chart(
+                resultado_sim.set_index("mes")[["pool_activo", "trasplantados_acumulados"]],
+                height=320,
+                alt="Parejas activas y trasplantes acumulados por mes",
+            )
+            st.markdown("#### Mecanismo de asignación por mes")
+            st.bar_chart(
+                resultado_sim.set_index("mes")[["via_ciclos", "via_cadenas"]],
+                stack="zero", height=320,
+                alt="Trasplantes mensuales vía ciclos y cadenas",
+            )
+            st.caption("`Vía cadenas` incluye el trasplante de cierre a la lista de espera general.")
+            st.markdown("#### Historial mensual")
+            st.dataframe(resultado_sim, hide_index=True, width="stretch", alt="Métricas de cada match run mensual")
+            st.download_button(
+                "Descargar historial CSV", resultado_sim.to_csv(index=False).encode("utf-8-sig"),
+                "simulacion_rondas_kpd.csv", "text/csv", width="content",
+            )

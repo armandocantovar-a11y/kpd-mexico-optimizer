@@ -107,6 +107,7 @@ class Pareja:
     id: str
     donante: Donante
     receptor: Receptor
+    meses_espera: int = 0
 
 
 @dataclass
@@ -227,7 +228,7 @@ def generar_altruistas(rng: random.Random, n: int = N_ALTRUISTAS, abo: str = "O"
 # ----------------------------------------------------------------------------
 # 3. CONSTRUCCIÓN DEL GRAFO DIRIGIDO PONDERADO
 # ----------------------------------------------------------------------------
-def prioridad_clinica(receptor: Receptor, donante: Donante) -> int:
+def prioridad_clinica(receptor: Receptor, donante: Donante, meses_espera: int = 0) -> int:
     """Bonificación clínica de una arista (donante -> receptor)."""
     p = 0
     # Hipersensibilización (pocos donantes compatibles => prioridad alta)
@@ -242,6 +243,9 @@ def prioridad_clinica(receptor: Receptor, donante: Donante) -> int:
         p += 20
     # Mejor histocompatibilidad: +1 por cada antígeno que COINCIDE (0-6)
     p += 6 - desajustes_hla(donante, receptor)
+    # Bonificación longitudinal: la espera siempre suma prioridad y no altera
+    # los resultados existentes cuando el parámetro conserva su valor por defecto.
+    p += max(0, int(meses_espera)) * 2
     return p
 
 
@@ -249,7 +253,7 @@ def es_altruista(G: nx.DiGraph, nodo: str) -> bool:
     return G.nodes[nodo].get("tipo") == "altruista"
 
 
-def construir_grafo(parejas: list, altruistas=()) -> nx.DiGraph:
+def construir_grafo(parejas: list, altruistas=(), meses_espera: dict[str, int] | None = None) -> nx.DiGraph:
     """Nodos: parejas (tipo='pareja') y altruistas (tipo='altruista').
     Arista X -> B: el donante de X es compatible con el receptor de la pareja B.
     Los altruistas solo emiten aristas: ninguna arista entra a un altruista."""
@@ -265,7 +269,9 @@ def construir_grafo(parejas: list, altruistas=()) -> nx.DiGraph:
             if id_donante != b.id and es_compatible(donante, b.receptor):
                 G.add_edge(
                     id_donante, b.id,
-                    weight=PESO_BASE + prioridad_clinica(b.receptor, donante),
+                    weight=PESO_BASE + prioridad_clinica(
+                        b.receptor, donante, (meses_espera or {}).get(b.id, 0)
+                    ),
                     mismatches=desajustes_hla(donante, b.receptor),
                 )
     return G

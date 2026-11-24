@@ -207,7 +207,7 @@ def resumen_calibracion(parejas, stats):
 # ----------------------------------------------------------------------------
 # 2. GRAFO RÁPIDO (máscaras de bits) — equivalente a kpd.construir_grafo
 # ----------------------------------------------------------------------------
-def construir_grafo_rapido(parejas, altruistas=()) -> nx.DiGraph:
+def construir_grafo_rapido(parejas, altruistas=(), meses_espera=None) -> nx.DiGraph:
     G = nx.DiGraph()
     G.add_nodes_from((p.id, {"tipo": "pareja", "pareja": p}) for p in parejas)
     G.add_nodes_from((a.id, {"tipo": "altruista", "altruista": a}) for a in altruistas)
@@ -223,7 +223,9 @@ def construir_grafo_rapido(parejas, altruistas=()) -> nx.DiGraph:
         for j, pj in enumerate(parejas):
             if id_d != pj.id and abo_rec[j] in permitidos and not (md & m_inac[j]):
                 aristas.append((id_d, pj.id, {
-                    "weight": kpd.PESO_BASE + kpd.prioridad_clinica(pj.receptor, don),
+                    "weight": kpd.PESO_BASE + kpd.prioridad_clinica(
+                        pj.receptor, don, (meses_espera or {}).get(pj.id, 0)
+                    ),
                     "mismatches": kpd.desajustes_hla(don, pj.receptor),
                 }))
     G.add_edges_from(aristas)
