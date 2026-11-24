@@ -32,32 +32,47 @@ _URBANO = {
 }
 
 
-def _centro(valor: str | Mapping) -> Mapping:
+def catalogo_desde_hospitales(hospitales) -> dict[str, dict]:
+    """Adapta filas aprobadas de Supabase al formato geográfico del motor."""
+    catalogo = {}
+    for h in hospitales:
+        centro = {
+            "id": str(h["id"]), "nombre": h["nombre"], "ciudad": h["ciudad"],
+            "lat": float(h.get("latitud", h.get("lat"))),
+            "lon": float(h.get("longitud", h.get("lon"))),
+            "hub_aereo": bool(h.get("hub_aereo", False)),
+        }
+        catalogo[centro["id"]] = centro
+    return catalogo
+
+
+def _centro(valor: str | Mapping, centros_por_id=None) -> Mapping:
     if isinstance(valor, Mapping):
         return valor
+    catalogo = CENTROS_POR_ID if centros_por_id is None else centros_por_id
     try:
-        return CENTROS_POR_ID[valor]
+        return catalogo[str(valor)]
     except KeyError as exc:
         raise ValueError(f"Centro desconocido: {valor!r}") from exc
 
 
-def distancia_haversine_km(origen: str | Mapping, destino: str | Mapping) -> float:
-    a, b = _centro(origen), _centro(destino)
+def distancia_haversine_km(origen: str | Mapping, destino: str | Mapping, centros_por_id=None) -> float:
+    a, b = _centro(origen, centros_por_id), _centro(destino, centros_por_id)
     lat1, lat2 = radians(a["lat"]), radians(b["lat"])
     dlat, dlon = lat2-lat1, radians(b["lon"]-a["lon"])
     h = sin(dlat/2)**2 + cos(lat1)*cos(lat2)*sin(dlon/2)**2
     return 6371.0088 * 2 * asin(sqrt(h))
 
 
-def calcular_tiempo_isquemia_min(centro_origen: str | Mapping, centro_destino: str | Mapping) -> int:
+def calcular_tiempo_isquemia_min(centro_origen: str | Mapping, centro_destino: str | Mapping, centros_por_id=None) -> int:
     """Estima minutos puerta a puerta: urbano, terrestre o aéreo con conexión."""
-    a, b = _centro(centro_origen), _centro(centro_destino)
+    a, b = _centro(centro_origen, centros_por_id), _centro(centro_destino, centros_por_id)
     if a["id"] == b["id"]:
         return 0
     if a["ciudad"] == b["ciudad"]:
         key = frozenset((a["id"], b["id"]))
-        return _URBANO.get(key, max(35, round(distancia_haversine_km(a, b) / 18 * 60 + 25)))
-    km = distancia_haversine_km(a, b)
+        return _URBANO.get(key, max(35, round(distancia_haversine_km(a, b, centros_por_id) / 18 * 60 + 25)))
+    km = distancia_haversine_km(a, b, centros_por_id)
     # 720 km/h aire, 45 min por aeropuerto/operación y traslados urbanos.
     # Sin hub se agrega una penalización de conexión de 90 min.
     vuelo = km / 720 * 60
@@ -76,10 +91,10 @@ def asignar_centros(parejas, altruistas=(), semilla: int = 2026) -> dict[str, st
     return {n: centros[i % len(centros)] for i, n in enumerate(ids)}
 
 
-def filtrar_y_ponderar_grafo(grafo, ubicaciones: Mapping[str, str], max_cit_min: int, lambda_logistica: float):
+def filtrar_y_ponderar_grafo(grafo, ubicaciones: Mapping[str, str], max_cit_min: int, lambda_logistica: float, centros_por_id=None):
     """Elimina aristas fuera de CIT y guarda penalización temporal por arista."""
     for u, v, datos in list(grafo.edges(data=True)):
-        minutos = calcular_tiempo_isquemia_min(ubicaciones[u], ubicaciones[v])
+        minutos = calcular_tiempo_isquemia_min(ubicaciones[u], ubicaciones[v], centros_por_id)
         if minutos > max_cit_min:
             grafo.remove_edge(u, v)
         else:

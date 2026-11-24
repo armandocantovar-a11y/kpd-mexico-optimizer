@@ -5,6 +5,8 @@ el modo sintético cuando Supabase no está configurado.
 """
 from __future__ import annotations
 
+import base64
+import json
 from typing import Any
 
 import streamlit as st
@@ -32,11 +34,36 @@ def _credenciales() -> tuple[str, str]:
 def cliente_supabase():
     """Crea cliente bajo demanda; nunca expone las credenciales al usuario."""
     url, key = _credenciales()
+    if key.startswith("sb_secret_"):
+        raise RuntimeError("La aplicación solo admite la clave anon/publishable; sb_secret/service_role omite RLS.")
+    parts = key.split(".")
+    if len(parts) == 3:
+        try:
+            encoded = parts[1] + "=" * (-len(parts[1]) % 4)
+            role = json.loads(base64.urlsafe_b64decode(encoded.encode("ascii"))).get("role")
+        except (ValueError, UnicodeError, json.JSONDecodeError):
+            role = None
+        if role == "service_role":
+            raise RuntimeError("La aplicación solo admite la clave anon/publishable; service_role omite RLS.")
     try:
         from supabase import create_client
     except ImportError as exc:
         raise RuntimeError("Falta la dependencia supabase. Instala requirements.txt.") from exc
     return create_client(url, key)
+
+
+def cliente_usuario():
+    """Construye un cliente con la sesión del médico del Streamlit actual."""
+    access = st.session_state.get("auth_access_token")
+    refresh = st.session_state.get("auth_refresh_token")
+    if not access or not refresh:
+        raise PermissionError("Inicia sesión para realizar esta operación.")
+    client = cliente_supabase()
+    response = client.auth.set_session(access, refresh)
+    session = getattr(response, "session", None) or response
+    st.session_state["auth_access_token"] = session.access_token
+    st.session_state["auth_refresh_token"] = session.refresh_token
+    return client
 
 
 def supabase_disponible() -> bool:
@@ -52,9 +79,9 @@ def _respuesta_data(respuesta) -> list[dict[str, Any]]:
 
 
 def insertar_pareja(
-    id_pareja: str, hospital_id: str, donante_abo: str, donante_hla,
+    id_pareja: str, hospital_id: int, donante_abo: str, donante_hla,
     receptor_abo: str, receptor_hla, receptor_inaceptables, receptor_cpra: int,
-    receptor_edad: int, *, advertir_compatibilidad: bool = True,
+    receptor_edad: int, *, advertir_compatibilidad: bool = True, client=None,
 ) -> dict[str, Any]:
     """Registra pareja activa; retorna la fila y si era compatible de origen."""
     id_pareja = id_pareja.strip()
@@ -79,11 +106,11 @@ def insertar_pareja(
         "receptor_inaceptables": sorted(receptor.inaceptables),
         "receptor_cpra": int(receptor_cpra), "receptor_edad": int(receptor_edad), "activa": True,
     }
-    data = _respuesta_data(cliente_supabase().table("parejas").insert(fila).execute())
+    data = _respuesta_data((client or cliente_usuario()).table("parejas").insert(fila).execute())
     return {**fila, "compatible_origen": compatible, **(data[0] if data else {})}
 
 
-def insertar_altruista(id_altruista: str, hospital_id: str, donante_abo: str, donante_hla) -> dict[str, Any]:
+def insertar_altruista(id_altruista: str, hospital_id: int, donante_abo: str, donante_hla, *, client=None) -> dict[str, Any]:
     id_altruista = id_altruista.strip()
     if not id_altruista:
         raise ValueError("El ID anónimo es obligatorio.")
@@ -91,13 +118,13 @@ def insertar_altruista(id_altruista: str, hospital_id: str, donante_abo: str, do
         raise ValueError("Grupo ABO o antígenos HLA inválidos.")
     fila = {"id_altruista": id_altruista, "hospital_id": hospital_id, "donante_abo": donante_abo,
             "donante_hla": sorted(set(donante_hla)), "activo": True}
-    data = _respuesta_data(cliente_supabase().table("altruistas").insert(fila).execute())
+    data = _respuesta_data((client or cliente_usuario()).table("altruistas").insert(fila).execute())
     return {**fila, **(data[0] if data else {})}
 
 
-def obtener_pool_real() -> tuple[list[kpd.Pareja], list[kpd.DonanteAltruista], dict[str, str]]:
+def obtener_pool_real(client=None) -> tuple[list[kpd.Pareja], list[kpd.DonanteAltruista], dict[str, str]]:
     """Descarga filas activas y devuelve parejas, altruistas y hospital_id por nodo."""
-    client = cliente_supabase()
+    client = client or cliente_usuario()
     rows_p = _respuesta_data(client.table("parejas").select("*").eq("activa", True).execute())
     rows_a = _respuesta_data(client.table("altruistas").select("*").eq("activo", True).execute())
     parejas: list[kpd.Pareja] = []
@@ -124,8 +151,48 @@ def desactivar_registro(tabla: str, id_registro: str) -> None:
     if tabla not in config:
         raise ValueError("Tabla no permitida; usa parejas o altruistas.")
     columna_id, columna_estado = config[tabla]
-    resultado = cliente_supabase().table(tabla).update({columna_estado: False}).eq(columna_id, id_registro).execute()
+    resultado = cliente_usuario().table(tabla).update({columna_estado: False}).eq(columna_id, id_registro).execute()
     if not _respuesta_data(resultado):
         # PostgREST puede ocultar la fila cuando retorna representación mínima;
         # la operación se considera ejecutada si no lanzó excepción.
         return
+
+
+def obtener_hospitales_aprobados(client=None) -> list[dict[str, Any]]:
+    """Lee el catálogo público aprobado; las solicitudes pendientes no se filtran al público."""
+    client = client or cliente_supabase()
+    return _respuesta_data(client.table("hospitales").select(
+        "id,nombre,ciudad,latitud,longitud,hub_aereo,estado"
+    ).eq("estado", "aprobado").order("id").execute())
+
+
+def solicitar_alta_hospital(nombre: str, ciudad: str, latitud: float, longitud: float,
+                            hub_aereo: bool, *, client=None) -> dict[str, Any]:
+    """Inserta solicitud omitiendo estado; PostgreSQL fija pendiente por default/RLS."""
+    nombre, ciudad = nombre.strip(), ciudad.strip()
+    if not nombre or not ciudad:
+        raise ValueError("El nombre y la ciudad son obligatorios.")
+    latitud, longitud = float(latitud), float(longitud)
+    if not -90 <= latitud <= 90 or not -180 <= longitud <= 180:
+        raise ValueError("Latitud o longitud fuera de rango.")
+    fila = {"nombre": nombre, "ciudad": ciudad, "latitud": latitud,
+            "longitud": longitud, "hub_aereo": bool(hub_aereo)}
+    data = _respuesta_data((client or cliente_usuario()).table("hospitales").insert(fila).execute())
+    return data[0] if data else fila
+
+
+def obtener_hospitales_pendientes(client=None) -> list[dict[str, Any]]:
+    client = client or cliente_usuario()
+    return _respuesta_data(client.table("hospitales").select(
+        "id,nombre,ciudad,latitud,longitud,hub_aereo,estado,creado_en"
+    ).eq("estado", "pendiente").order("creado_en").execute())
+
+
+def actualizar_estado_hospital(hospital_id: int, nuevo_estado: str, *, client=None) -> None:
+    if nuevo_estado not in {"aprobado", "rechazado"}:
+        raise ValueError("Estado de hospital no permitido.")
+    data = _respuesta_data((client or cliente_usuario()).table("hospitales")
+        .update({"estado": nuevo_estado}).eq("id", int(hospital_id))
+        .eq("estado", "pendiente").select("id").execute())
+    if not data:
+        raise PermissionError("No se actualizó el hospital; verifica que esté pendiente y que la cuenta sea admin.")
