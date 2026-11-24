@@ -214,6 +214,35 @@ with tabs[0]:
         st.dataframe(tabla, hide_index=True, width="stretch")
         st.download_button("Descargar trasplantes CSV", tabla.to_csv(index=False).encode("utf-8-sig"), "trasplantes_kpd.csv", "text/csv")
 
+        if fuente == "Base de Datos Real (Supabase)" and (sol.ciclos or sol.cadenas):
+            if perfil_actual.get("rol") != "admin":
+                st.info("La optimización encontró ciclos/cadenas. Solo un administrador puede confirmar trasplantes reales; esta acción actualizará todos los centros de la estructura seleccionada.")
+            else:
+                st.markdown("#### Cierre de trasplantes reales")
+                st.caption("Confirma únicamente después de verificar que el trasplante se realizó. La operación marca todos los registros de cada estructura como trasplantados en una única transacción.")
+                for idx, ciclo in enumerate(sol.ciclos, start=1):
+                    with st.container(border=True):
+                        st.write(f"**Ciclo {idx}** · {len(ciclo)} parejas · " + " → ".join(ciclo))
+                        if st.button("✅ Confirmar Trasplante Realizado", key=f"confirmar_ciclo_{idx}", type="primary"):
+                            try:
+                                db.confirmar_trasplante_lote(ciclo, (), client=db.cliente_usuario())
+                                st.success("Trasplante del ciclo confirmado.")
+                                st.session_state.pop("resultado_kpd", None)
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(f"No se pudo confirmar el ciclo: {exc}")
+                for idx, cadena in enumerate(sol.cadenas, start=1):
+                    with st.container(border=True):
+                        st.write(f"**Cadena {idx}** · {len(cadena.parejas)} parejas · altruista {cadena.altruista} · " + " → ".join(cadena.parejas))
+                        if st.button("✅ Confirmar Trasplante Realizado", key=f"confirmar_cadena_{idx}", type="primary"):
+                            try:
+                                db.confirmar_trasplante_lote(cadena.parejas, [cadena.altruista], client=db.cliente_usuario())
+                                st.success("Trasplante de la cadena confirmado.")
+                                st.session_state.pop("resultado_kpd", None)
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(f"No se pudo confirmar la cadena: {exc}")
+
 
 with tabs[1]:
     st.subheader("Registro Clínico")
@@ -263,7 +292,7 @@ with tabs[1]:
         except Exception as exc:
             st.error(f"No se pudo guardar el altruista: {exc}")
 
-    st.markdown("#### Pool actualmente activo")
+    st.markdown("#### Gestión del Pool")
     recargar = st.button("Recargar pool activo", key="recargar_pool")
     if db.supabase_disponible() and tabs[1].open:
         try:
@@ -271,26 +300,50 @@ with tabs[1]:
             st.session_state["pool_clinico_visible"] = (parejas_db, altruistas_db, ubic_db)
             filas_pool = [{"tipo":"Pareja", "id":p.id, "hospital_id":ubic_db[p.id], "ABO donante":p.donante.abo,
                            "ABO receptor":p.receptor.abo, "cPRA":p.receptor.cpra, "edad":p.receptor.edad,
-                           "Meses espera":p.meses_espera, "activo":True} for p in parejas_db]
+                           "Meses espera":p.meses_espera, "estado":"activo"} for p in parejas_db]
             filas_pool.extend({"tipo":"Altruista", "id":a.id, "hospital_id":ubic_db[a.id], "ABO donante":a.donante.abo,
-                               "ABO receptor":"—", "cPRA":"—", "edad":"—", "Meses espera":"—", "activo":True} for a in altruistas_db)
-            st.dataframe(pd.DataFrame(filas_pool, columns=["tipo","id","hospital_id","ABO donante","ABO receptor","cPRA","edad","Meses espera","activo"]), hide_index=True, width="stretch")
+                               "ABO receptor":"—", "cPRA":"—", "edad":"—", "Meses espera":"—", "estado":"activo"} for a in altruistas_db)
+            st.dataframe(pd.DataFrame(filas_pool, columns=["tipo","id","hospital_id","ABO donante","ABO receptor","cPRA","edad","Meses espera","estado"]), hide_index=True, width="stretch")
+            if not filas_pool:
+                st.info("No hay parejas ni donantes altruistas activos en Supabase.")
+
             if perfil_actual.get("rol") == "admin":
                 filas_gestion = filas_pool
             else:
                 hospital_medico = str(perfil_actual["hospital_id"])
                 filas_gestion = [r for r in filas_pool if str(r["hospital_id"]) == hospital_medico]
-            if filas_gestion:
-                opcion = st.selectbox("Registro de tu hospital para dar de baja", filas_gestion, format_func=lambda r:f"{r['tipo']} · {r['id']}")
-                if st.button("Marcar como inactivo", key="desactivar_registro"):
-                    tabla = "parejas" if opcion["tipo"] == "Pareja" else "altruistas"
-                    db.desactivar_registro(tabla, opcion["id"])
-                    st.success("Registro marcado como inactivo.")
-                    st.rerun()
-            elif not filas_pool:
-                st.info("No hay parejas ni donantes altruistas activos en Supabase.")
-            else:
-                st.caption("No hay registros de tu hospital disponibles para gestionar.")
+            with st.expander("🗑️ Dar de baja paciente / altruista"):
+                if filas_gestion:
+                    opcion_baja = st.selectbox("Registro activo", filas_gestion,
+                        format_func=lambda r: f"{r['tipo']} · {r['id']} · hospital {r['hospital_id']}", key="registro_baja")
+                    motivo_baja = st.text_input("Motivo breve (opcional)", max_chars=500, key="motivo_baja")
+                    confirmar_baja = st.button("Confirmar baja lógica", key="confirmar_baja", type="primary")
+                    if confirmar_baja:
+                        try:
+                            fn = db.dar_de_baja_pareja if opcion_baja["tipo"] == "Pareja" else db.dar_de_baja_altruista
+                            fn(opcion_baja["id"], motivo_baja, client=db.cliente_usuario())
+                            st.success("Registro dado de baja; ya no forma parte del pool activo.")
+                            st.session_state.pop("resultado_kpd", None)
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"No se pudo dar de baja el registro: {exc}")
+                else:
+                    st.caption("No hay registros activos de tu hospital para dar de baja.")
+
+            with st.expander("📋 Historial (Trasplantados y Bajas)", expanded=False):
+                if st.button("Cargar historial", key="cargar_historial"):
+                    try:
+                        st.session_state["historial_registros"] = db.obtener_historial_registros()
+                    except Exception as exc:
+                        st.error(f"No se pudo cargar el historial: {exc}")
+                historial = st.session_state.get("historial_registros", [])
+                if perfil_actual.get("rol") != "admin":
+                    historial = [r for r in historial if str(r.get("hospital_id")) == str(perfil_actual["hospital_id"])]
+                if historial:
+                    columnas_hist = ["tipo", "id", "hospital_id", "estado", "motivo_baja", "actualizado_en"]
+                    st.dataframe(pd.DataFrame(historial).reindex(columns=columnas_hist), hide_index=True, width="stretch")
+                else:
+                    st.caption("No hay historial cargado o no existen registros no activos visibles.")
         except Exception as exc:
             st.error(f"No se pudo leer el pool activo de Supabase: {exc}")
     elif db.supabase_disponible() and st.session_state.get("pool_clinico_visible"):
@@ -298,10 +351,10 @@ with tabs[1]:
         parejas_db, altruistas_db, ubic_db = st.session_state["pool_clinico_visible"]
         filas_pool = [{"tipo":"Pareja", "id":p.id, "hospital_id":ubic_db[p.id], "ABO donante":p.donante.abo,
                        "ABO receptor":p.receptor.abo, "cPRA":p.receptor.cpra, "edad":p.receptor.edad,
-                       "Meses espera":p.meses_espera, "activo":True} for p in parejas_db]
+                       "Meses espera":p.meses_espera, "estado":"activo"} for p in parejas_db]
         filas_pool.extend({"tipo":"Altruista", "id":a.id, "hospital_id":ubic_db[a.id], "ABO donante":a.donante.abo,
-                           "ABO receptor":"—", "cPRA":"—", "edad":"—", "Meses espera":"—", "activo":True} for a in altruistas_db)
-        st.dataframe(pd.DataFrame(filas_pool, columns=["tipo","id","hospital_id","ABO donante","ABO receptor","cPRA","edad","Meses espera","activo"]), hide_index=True, width="stretch")
+                           "ABO receptor":"—", "cPRA":"—", "edad":"—", "Meses espera":"—", "estado":"activo"} for a in altruistas_db)
+        st.dataframe(pd.DataFrame(filas_pool, columns=["tipo","id","hospital_id","ABO donante","ABO receptor","cPRA","edad","Meses espera","estado"]), hide_index=True, width="stretch")
     else:
         st.caption("El pool se mostrará aquí cuando Supabase esté configurado.")
 

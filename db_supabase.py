@@ -156,8 +156,8 @@ def insertar_altruista(id_altruista: str, hospital_id: int, donante_abo: str, do
 def obtener_pool_real(client=None) -> tuple[list[kpd.Pareja], list[kpd.DonanteAltruista], dict[str, str]]:
     """Descarga filas activas y devuelve parejas, altruistas y hospital_id por nodo."""
     client = client or cliente_usuario()
-    rows_p = _respuesta_data(client.table("parejas").select("*").eq("activa", True).execute())
-    rows_a = _respuesta_data(client.table("altruistas").select("*").eq("activo", True).execute())
+    rows_p = _respuesta_data(client.table("parejas").select("*").eq("estado", "activo").execute())
+    rows_a = _respuesta_data(client.table("altruistas").select("*").eq("estado", "activo").execute())
     parejas: list[kpd.Pareja] = []
     altruistas: list[kpd.DonanteAltruista] = []
     ubicaciones: dict[str, str] = {}
@@ -178,17 +178,46 @@ def obtener_pool_real(client=None) -> tuple[list[kpd.Pareja], list[kpd.DonanteAl
     return parejas, altruistas, ubicaciones
 
 
-def desactivar_registro(tabla: str, id_registro: str) -> None:
-    """Da de baja lógica una fila; las tablas y columnas están en allowlist."""
-    config = {"parejas": ("id_pareja", "activa"), "altruistas": ("id_altruista", "activo")}
-    if tabla not in config:
-        raise ValueError("Tabla no permitida; usa parejas o altruistas.")
-    columna_id, columna_estado = config[tabla]
-    resultado = cliente_usuario().table(tabla).update({columna_estado: False}).eq(columna_id, id_registro).execute()
-    if not _respuesta_data(resultado):
-        # PostgREST puede ocultar la fila cuando retorna representación mínima;
-        # la operación se considera ejecutada si no lanzó excepción.
-        return
+def obtener_historial_registros(client=None) -> list[dict[str, Any]]:
+    """Devuelve parejas/altruistas trasplantados o dados de baja, visibles por RLS."""
+    client = client or cliente_usuario()
+    historial = []
+    for tabla, columna_id, tipo in (("parejas", "id_pareja", "Pareja"),
+                                    ("altruistas", "id_altruista", "Altruista")):
+        filas = _respuesta_data(client.table(tabla).select("*")
+            .in_("estado", ["trasplantado", "baja"]).order("actualizado_en", desc=True).execute())
+        historial.extend({**fila, "tipo": tipo, "id": fila.get(columna_id)} for fila in filas)
+    return sorted(historial, key=lambda fila: str(fila.get("actualizado_en") or ""), reverse=True)
+
+
+def _dar_de_baja(tabla: str, columna_id: str, registro_id: str, motivo: str | None, *, client=None) -> None:
+    motivo = (motivo or "").strip()[:500] or None
+    data = _respuesta_data((client or cliente_usuario()).table(tabla)
+        .update({"estado": "baja", "motivo_baja": motivo})
+        .eq(columna_id, str(registro_id)).eq("estado", "activo").select(columna_id).execute())
+    if not data:
+        raise PermissionError("No se actualizó el registro; puede no estar activo o la política RLS lo impide.")
+
+
+def dar_de_baja_pareja(pareja_id: str, motivo: str | None = None, *, client=None) -> None:
+    _dar_de_baja("parejas", "id_pareja", pareja_id, motivo, client=client)
+
+
+def dar_de_baja_altruista(altruista_id: str, motivo: str | None = None, *, client=None) -> None:
+    _dar_de_baja("altruistas", "id_altruista", altruista_id, motivo, client=client)
+
+
+def confirmar_trasplante_lote(pareja_ids, altruista_ids=(), *, client=None) -> dict[str, Any]:
+    """Confirma de forma atómica parejas y donantes de una estructura (solo admin)."""
+    parejas = list(dict.fromkeys(str(i) for i in pareja_ids))
+    altruistas = list(dict.fromkeys(str(i) for i in altruista_ids))
+    if not parejas and not altruistas:
+        raise ValueError("No hay registros en la estructura seleccionada.")
+    respuesta = (client or cliente_usuario()).rpc("confirmar_trasplante_lote", {
+        "p_pareja_ids": parejas, "p_altruista_ids": altruistas,
+    }).execute()
+    datos = getattr(respuesta, "data", None)
+    return datos if isinstance(datos, dict) else {"resultado": datos}
 
 
 def obtener_hospitales_aprobados(client=None) -> list[dict[str, Any]]:
@@ -222,10 +251,22 @@ def obtener_hospitales_pendientes(client=None) -> list[dict[str, Any]]:
 
 
 def actualizar_estado_hospital(hospital_id: int, nuevo_estado: str, *, client=None) -> None:
-    if nuevo_estado not in {"aprobado", "rechazado"}:
+    if nuevo_estado not in {"aprobado", "rechazado", "inactivo"}:
         raise ValueError("Estado de hospital no permitido.")
     data = _respuesta_data((client or cliente_usuario()).table("hospitales")
         .update({"estado": nuevo_estado}).eq("id", int(hospital_id))
         .eq("estado", "pendiente").select("id").execute())
     if not data:
-        raise PermissionError("No se actualizó el hospital; verifica que esté pendiente y que la cuenta sea admin.")
+        raise PermissionError("No se actualizó el hospital; verifica su estado actual y que la cuenta sea admin.")
+
+
+def cambiar_estado_hospital(hospital_id: int, nuevo_estado: str, *, client=None) -> None:
+    """Activa o inactiva un hospital aprobado; la política RLS valida rol admin."""
+    if nuevo_estado not in {"aprobado", "inactivo"}:
+        raise ValueError("El hospital solo puede activarse o inactivarse desde esta acción.")
+    origen = "inactivo" if nuevo_estado == "aprobado" else "aprobado"
+    data = _respuesta_data((client or cliente_usuario()).table("hospitales")
+        .update({"estado": nuevo_estado}).eq("id", int(hospital_id))
+        .eq("estado", origen).select("id").execute())
+    if not data:
+        raise PermissionError("No se cambió el hospital; revisa su estado y los permisos administrativos.")

@@ -277,26 +277,53 @@ def _render_admin_hospitales(client) -> None:
         return
     if not pendientes:
         st.caption("No hay hospitales pendientes.")
+    else:
+        st.dataframe(pd.DataFrame(pendientes), hide_index=True, width="stretch")
+        for hospital in pendientes:
+            with st.container(border=True):
+                st.write(f"**{hospital['nombre']}** · {hospital['ciudad']} · ID {hospital['id']}")
+                aprobar, rechazar = st.columns(2)
+                if aprobar.button("Aprobar hospital", key=f"aprobar_hospital_{hospital['id']}", type="primary", width="stretch"):
+                    try:
+                        db.actualizar_estado_hospital(hospital["id"], "aprobado", client=client)
+                        st.success("Hospital aprobado y visible en los catálogos.")
+                        st.rerun()
+                    except Exception:
+                        st.error("No se pudo aprobar el hospital. Comprueba la política RLS.")
+                if rechazar.button("Rechazar hospital", key=f"rechazar_hospital_{hospital['id']}", width="stretch"):
+                    try:
+                        db.actualizar_estado_hospital(hospital["id"], "rechazado", client=client)
+                        st.success("Solicitud de hospital rechazada.")
+                        st.rerun()
+                    except Exception:
+                        st.error("No se pudo rechazar el hospital. Comprueba la política RLS.")
+
+    st.markdown("#### Gestión de hospitales aprobados / inactivos")
+    try:
+        centros = list(client.table("hospitales").select(
+            "id,nombre,ciudad,estado,hub_aereo"
+        ).in_("estado", ["aprobado", "inactivo"]).order("nombre").execute().data or [])
+    except Exception:
+        st.error("No fue posible cargar los hospitales para su gestión.")
         return
-    st.dataframe(pd.DataFrame(pendientes), hide_index=True, width="stretch")
-    for hospital in pendientes:
+    if not centros:
+        st.caption("No hay hospitales aprobados o inactivos.")
+        return
+    st.dataframe(pd.DataFrame(centros), hide_index=True, width="stretch")
+    for hospital in centros:
         with st.container(border=True):
-            st.write(f"**{hospital['nombre']}** · {hospital['ciudad']} · ID {hospital['id']}")
-            aprobar, rechazar = st.columns(2)
-            if aprobar.button("Aprobar hospital", key=f"aprobar_hospital_{hospital['id']}", type="primary", width="stretch"):
+            estado_actual = hospital["estado"]
+            accion = "Inactivar hospital" if estado_actual == "aprobado" else "Reactivar hospital"
+            nuevo_estado = "inactivo" if estado_actual == "aprobado" else "aprobado"
+            st.write(f"**{hospital['nombre']}** · {hospital['ciudad']} · {estado_actual}")
+            if st.button(accion, key=f"cambiar_hospital_{hospital['id']}",
+                         type="primary" if nuevo_estado == "inactivo" else "secondary", width="stretch"):
                 try:
-                    db.actualizar_estado_hospital(hospital["id"], "aprobado", client=client)
-                    st.success("Hospital aprobado y visible en los catálogos.")
+                    db.cambiar_estado_hospital(hospital["id"], nuevo_estado, client=client)
+                    st.success("Estado del hospital actualizado.")
                     st.rerun()
                 except Exception:
-                    st.error("No se pudo aprobar el hospital. Comprueba la política RLS.")
-            if rechazar.button("Rechazar hospital", key=f"rechazar_hospital_{hospital['id']}", width="stretch"):
-                try:
-                    db.actualizar_estado_hospital(hospital["id"], "rechazado", client=client)
-                    st.success("Solicitud de hospital rechazada.")
-                    st.rerun()
-                except Exception:
-                    st.error("No se pudo rechazar el hospital. Comprueba la política RLS.")
+                    st.error("No se pudo cambiar el estado del hospital. Comprueba la política RLS y la migración.")
 
 
 def render_admin_approval_panel(perfil: dict[str, Any]) -> None:
