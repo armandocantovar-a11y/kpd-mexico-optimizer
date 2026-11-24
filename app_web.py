@@ -85,7 +85,7 @@ def ejecutar_optimizacion():
         hospitales = db.obtener_hospitales_aprobados(client)
         centros = geo.catalogo_desde_hospitales(hospitales)
         parejas, altruistas, ubic = db.obtener_pool_real(client)
-        espera_por_pareja = {p.id: p.meses_espera for p in parejas}
+        espera_por_pareja = {p.id: getattr(p, "meses_espera", 0) for p in parejas}
         resultado = crear_resultado(parejas, altruistas, ubic, centros, round(max_cit_horas*60), lam, kmax, lmax,
                                     exacto=True, meses_espera=espera_por_pareja)
         resultado["fuente"] = fuente
@@ -300,7 +300,7 @@ with tabs[1]:
             st.session_state["pool_clinico_visible"] = (parejas_db, altruistas_db, ubic_db)
             filas_pool = [{"tipo":"Pareja", "id":p.id, "hospital_id":ubic_db[p.id], "ABO donante":p.donante.abo,
                            "ABO receptor":p.receptor.abo, "cPRA":p.receptor.cpra, "edad":p.receptor.edad,
-                           "Meses espera":p.meses_espera, "estado":"activo"} for p in parejas_db]
+                           "Meses espera":getattr(p, "meses_espera", 0), "estado":"activo"} for p in parejas_db]
             filas_pool.extend({"tipo":"Altruista", "id":a.id, "hospital_id":ubic_db[a.id], "ABO donante":a.donante.abo,
                                "ABO receptor":"—", "cPRA":"—", "edad":"—", "Meses espera":"—", "estado":"activo"} for a in altruistas_db)
             st.dataframe(pd.DataFrame(filas_pool, columns=["tipo","id","hospital_id","ABO donante","ABO receptor","cPRA","edad","Meses espera","estado"]), hide_index=True, width="stretch")
@@ -351,7 +351,7 @@ with tabs[1]:
         parejas_db, altruistas_db, ubic_db = st.session_state["pool_clinico_visible"]
         filas_pool = [{"tipo":"Pareja", "id":p.id, "hospital_id":ubic_db[p.id], "ABO donante":p.donante.abo,
                        "ABO receptor":p.receptor.abo, "cPRA":p.receptor.cpra, "edad":p.receptor.edad,
-                       "Meses espera":p.meses_espera, "estado":"activo"} for p in parejas_db]
+                       "Meses espera":getattr(p, "meses_espera", 0), "estado":"activo"} for p in parejas_db]
         filas_pool.extend({"tipo":"Altruista", "id":a.id, "hospital_id":ubic_db[a.id], "ABO donante":a.donante.abo,
                            "ABO receptor":"—", "cPRA":"—", "edad":"—", "Meses espera":"—", "estado":"activo"} for a in altruistas_db)
         st.dataframe(pd.DataFrame(filas_pool, columns=["tipo","id","hospital_id","ABO donante","ABO receptor","cPRA","edad","Meses espera","estado"]), hide_index=True, width="stretch")

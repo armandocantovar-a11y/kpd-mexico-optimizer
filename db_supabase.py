@@ -167,7 +167,10 @@ def obtener_pool_real(client=None) -> tuple[list[kpd.Pareja], list[kpd.DonanteAl
                                 frozenset(row.get("receptor_inaceptables") or []), int(row.get("receptor_cpra") or 0), int(row.get("receptor_edad") or 0))
         espera_previa = int(row.get("meses_espera_previos") or 0)
         espera_total = espera_previa + _meses_transcurridos(row.get("creado_en"))
-        pareja = kpd.Pareja(str(row["id_pareja"]), donante, receptor, espera_total)
+        pareja = kpd.Pareja(
+            id=str(row["id_pareja"]), donante=donante, receptor=receptor
+        )
+        setattr(pareja, "meses_espera", espera_total)
         parejas.append(pareja)
         ubicaciones[pareja.id] = str(row["hospital_id"])
     for row in rows_a:
