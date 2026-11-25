@@ -451,9 +451,8 @@ with tabs[3]:
             st.markdown("#### Mecanismo de asignación por mes")
             st.bar_chart(
                 resultado_sim.set_index("mes")[["via_ciclos", "via_cadenas"]],
-                stack="zero", height=320,
-                alt="Trasplantes mensuales vía ciclos y cadenas",
-            )
+                stack="zero", height=320
+                )
             st.caption("`Vía cadenas` incluye el trasplante de cierre a la lista de espera general.")
             st.markdown("#### Historial mensual")
             st.dataframe(resultado_sim, hide_index=True, width="stretch", alt="Métricas de cada match run mensual")

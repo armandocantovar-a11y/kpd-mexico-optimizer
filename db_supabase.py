@@ -233,7 +233,7 @@ def obtener_hospitales_aprobados(client=None) -> list[dict[str, Any]]:
 
 def solicitar_alta_hospital(nombre: str, ciudad: str, latitud: float, longitud: float,
                             hub_aereo: bool, *, client=None) -> dict[str, Any]:
-    """Inserta solicitud omitiendo estado; PostgreSQL fija pendiente por default/RLS."""
+    """Inserta una solicitud como pendiente usando la sesión autenticada actual."""
     nombre, ciudad = nombre.strip(), ciudad.strip()
     if not nombre or not ciudad:
         raise ValueError("El nombre y la ciudad son obligatorios.")
@@ -241,8 +241,9 @@ def solicitar_alta_hospital(nombre: str, ciudad: str, latitud: float, longitud: 
     if not -90 <= latitud <= 90 or not -180 <= longitud <= 180:
         raise ValueError("Latitud o longitud fuera de rango.")
     fila = {"nombre": nombre, "ciudad": ciudad, "latitud": latitud,
-            "longitud": longitud, "hub_aereo": bool(hub_aereo)}
-    data = _respuesta_data((client or cliente_usuario()).table("hospitales").insert(fila).execute())
+            "longitud": longitud, "hub_aereo": bool(hub_aereo), "estado": "pendiente"}
+    cliente = client if client is not None else cliente_usuario()
+    data = _respuesta_data(cliente.table("hospitales").insert(fila).execute())
     return data[0] if data else fila
 
 

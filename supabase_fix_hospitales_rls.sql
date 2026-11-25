@@ -7,8 +7,8 @@ ALTER TABLE public.hospitales ENABLE ROW LEVEL SECURITY;
 
 -- El acceso por columnas limita también los datos que el cliente puede proponer.
 REVOKE INSERT ON public.hospitales FROM public, anon, authenticated;
-GRANT INSERT (nombre, ciudad, latitud, longitud, hub_aereo)
-    ON public.hospitales TO authenticated;
+GRANT INSERT (nombre, ciudad, latitud, longitud, hub_aereo, estado)
+    ON public.hospitales TO authenticated, anon;
 
 -- Quita políticas INSERT/ALL previas que, por ser permisivas, podrían OR
 -- combinarse con esta y aceptar estados distintos de pendiente. SELECT y UPDATE
@@ -31,5 +31,5 @@ $$;
 CREATE POLICY "usuario autenticado solicita hospital"
     ON public.hospitales
     FOR INSERT
-    TO authenticated
+    TO authenticated, anon
     WITH CHECK (estado = 'pendiente'::public.estado_hospital);
