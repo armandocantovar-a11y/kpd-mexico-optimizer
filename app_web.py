@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+import importlib
 
 import pandas as pd
 import pydeck as pdk
@@ -10,6 +11,7 @@ import streamlit as st
 import benchmark_nacional as bench
 import auth_medica as auth_ui
 import db_supabase as db
+db = importlib.reload(db)
 import kpd_motor_emparejamiento as kpd
 import logistica_geografica as geo
 import simulador_rondas as sim_rondas
